@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>TOEIC Vocab Review</title>
+    <link id="appStylesheet" rel="stylesheet" />
+</head>
+
+<body>
+    <main class="app">
+        <header class="app-header">
+            <div class="header-actions">
+                <button id="learnModeBtn" class="ghost-btn" type="button">Learn</button>
+                <button id="reviewModeBtn" class="ghost-btn" type="button">Review</button>
+                <button id="learnedWordsTabBtn" class="ghost-btn" type="button">Learned Words</button>
+            </div>
+            <img class="header-logo" src="./icon/ETS_TOEIC.png" alt="ETS TOEIC" />
+        </header>
+
+        <section class="card" id="cardContainer" aria-live="polite">
+            <section class="progress-track" aria-label="Session progress">
+                <div id="progressFill" class="progress-fill"></div>
+            </section>
+
+            <p id="wordText" class="word-display hidden"></p>
+            <p id="meaningText" class="meaning-display hidden"></p>
+            <p id="promptText"></p>
+
+            <div id="audioWrap" class="hidden">
+                <button id="audioReplayBtn" class="audio-replay-btn large" type="button" aria-label="Replay audio">
+                    <img src="./icon/speaker.svg" alt="Replay audio" />
+                </button>
+                <audio id="pronAudio" preload="none" class="hidden"></audio>
+            </div>
+
+            <input id="typingInput" class="hidden" type="text" autocomplete="off" placeholder="Type the word..." />
+
+            <div id="choicesWrap" class="choices"></div>
+
+            <div class="feedback-row">
+                <span id="feedbackText"></span>
+            </div>
+        </section>
+
+        <section class="card hidden" id="learnedWordsPanel" aria-live="polite">
+            <section class="progress-track" aria-label="Learned words progress">
+                <div id="learnedProgressFill" class="progress-fill"></div>
+            </section>
+
+            <div class="panel-header">
+                <p class="panel-title">Learned words</p>
+                <button id="resetProgressBtn" class="ghost-btn danger-btn" type="button">Delete all learned
+                    words</button>
+            </div>
+            <div id="learnedWordsList" class="learned-list"></div>
+        </section>
+    </main>
+
+    <div id="appInfoOverlay" class="app-info-overlay hidden" aria-hidden="true">
+        <section class="app-info-card" role="dialog" aria-modal="true" aria-labelledby="appInfoTitle">
+            <div class="app-info-header">
+                <h2 id="appInfoTitle">TOEIC Vocabulary Builder 2026</h2>
+                <button id="appInfoCloseBtn" type="button" class="ghost-btn app-info-close"
+                    aria-label="Close info">✕</button>
+            </div>
+            <p class="app-info-line"><strong>Developer:</strong> Nguyễn Thành Đạt (thanhdat7d2)</p>
+            <p class="app-info-line"><strong>Version:</strong> <span id="appInfoVersion">-</span></p>
+            <p class="app-info-line"><strong>Total words:</strong> <span id="appInfoWordCount">-</span></p>
+            <p class="app-info-line"><strong>Session size:</strong> 50 cards</p>
+        </section>
+    </div>
+
+    <script type="module">
+        const version = Date.now().toString();
+        window.__ASSET_VERSION__ = version;
+
+        const stylesheet = document.getElementById("appStylesheet");
+        stylesheet.href = `./style/app.css?v=${version}`;
+
+        await import(`./script/app.js?v=${version}`);
+    </script>
+</body>
+
+</html>
