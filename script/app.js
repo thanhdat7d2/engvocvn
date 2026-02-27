@@ -281,8 +281,7 @@ function wireEvents() {
         const currentCard = session[currentIndex];
         const canAdvanceDefinition = currentCard?.cardType === "definition";
         const canSubmitTypingBySwipe = isTypingQuizCard(currentCard)
-            && !answered
-            && typingInput.value.trim().length > 0;
+            && !answered;
 
         if (!answered && !canAdvanceDefinition && !canSubmitTypingBySwipe) {
             return;
@@ -340,10 +339,6 @@ function submitTypingAnswerForCurrentCard() {
 
     const entry = data[card.wordId];
     const userAnswer = typingInput.value.trim().toLowerCase();
-    if (!userAnswer) {
-        return false;
-    }
-
     const correctAnswer = (entry.vocab || "").trim().toLowerCase();
     const isCorrect = userAnswer === correctAnswer;
 
