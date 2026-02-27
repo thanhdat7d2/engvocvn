@@ -100,14 +100,23 @@ body {
 }
 
 .card {
+    --card-pad: 20px;
     background: #ffffff;
     border: 1px solid #d0d7de;
     border-radius: 12px;
-    padding: 20px;
+    padding: var(--card-pad);
     display: flex;
     flex-direction: column;
     gap: 12px;
     min-height: 0;
+}
+
+#cardContainer:not(.hidden) {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
 }
 
 .card h2 {
@@ -137,6 +146,8 @@ body {
     font-family: "SF Pro Rounded", "Inter", Arial, sans-serif;
     font-size: 32px;
     text-align: center;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .choices {
@@ -265,6 +276,38 @@ button:disabled {
     align-items: center;
     min-height: 40px;
     gap: 10px;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: #ffffff;
+    margin-left: calc(var(--card-pad) * -1);
+    margin-right: calc(var(--card-pad) * -1);
+    margin-bottom: calc(var(--card-pad) * -1);
+    padding: 8px var(--card-pad) var(--card-pad);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.01);
+    isolation: isolate;
+}
+
+.feedback-row::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -26px;
+    height: 26px;
+    pointer-events: none;
+    background: linear-gradient(to top, #ffffff 0%, rgba(255, 255, 255, 0) 100%);
+}
+
+.feedback-row::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    box-shadow:
+        -14px 0 18px rgba(255, 255, 255, 0.95),
+        14px 0 18px rgba(255, 255, 255, 0.95),
+        0 14px 18px rgba(255, 255, 255, 0.95);
 }
 
 #audioWrap:not(.hidden) {
@@ -311,12 +354,17 @@ button:disabled {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
+    max-width: 100%;
+    row-gap: 4px;
 }
 
 .word-main-text {
     font-family: "SF Pro Rounded", "Inter", Arial, sans-serif;
     font-size: 45px;
     line-height: 1.1;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .word-main-text.word-jumpable {
@@ -351,6 +399,9 @@ button:disabled {
     font-family: "Inter", Arial, sans-serif;
     font-size: 20px;
     color: #0000FF;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .word-ipa-below {
@@ -359,6 +410,9 @@ button:disabled {
     font-size: 20px;
     color: #0000FF;
     text-align: center;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .definition-meta {
@@ -368,6 +422,8 @@ button:disabled {
     font-family: "Inter", Arial, sans-serif;
     font-size: 1rem;
     text-align: left;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .definition-meta p {
@@ -475,6 +531,7 @@ button:disabled {
     overflow-y: auto;
     overflow-x: hidden;
     padding-right: 2px;
+    align-content: start;
 }
 
 .learned-row {
@@ -484,6 +541,8 @@ button:disabled {
     justify-content: space-between;
     gap: 12px;
     min-height: 44px;
+    height: 44px;
+    max-height: 44px;
     padding: 4px 0;
 }
 
@@ -521,7 +580,16 @@ button:disabled {
     line-height: 1.25;
     margin-top: 2px;
     margin-left: 0;
+    width: 100%;
     white-space: normal;
+    overflow: hidden;
+    display: block;
+    max-height: calc(1.25em * 1);
+    line-clamp: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
     opacity: 0.85;
 }
 
@@ -641,7 +709,7 @@ button:disabled {
     }
 
     .card {
-        padding: 14px;
+        --card-pad: 14px;
         border-radius: 10px;
     }
 

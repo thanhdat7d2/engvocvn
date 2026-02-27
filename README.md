@@ -1,46 +1,94 @@
-# engvocvn
+# ENGVOCVN
 
-engvocvn is a lightweight TOEIC vocabulary web app focused on long-term retention using spaced repetition and mixed practice formats.
+ENGVOCVN is a TOEIC-focused English vocabulary web app built for **long-term retention**, not short-term memorization.  
+It combines spaced repetition, mixed quiz formats, and instant mistake recovery so learners can keep improving across sessions.
 
 ## Live Demo
 
-GitHub Pages: https://thanhdat7d2.github.io/engvocvn/
+Try it on GitHub Pages: **https://thanhdat7d2.github.io/engvocvn/**
 
-## What You Can Do
+## Demo Screenshots
 
-- Learn new words in focused sessions.
-- Review previously learned words with adaptive scheduling.
-- Practice with multiple quiz types:
-  - Meaning -> Word (multiple choice)
-  - Meaning -> Word (typing)
-  - Word -> Meaning (multiple choice)
-  - Example -> Meaning (multiple choice)
-  - Audio -> Meaning (multiple choice)
-  - Synonym / Antonym (multiple choice)
-- Track progress in the Learned Words panel.
-- Replay pronunciation audio when available.
+### 1) Learn Word Definition
 
-## How It Works
+![Learn Word Definition](demo/Learn_Word_definition.png)
 
-- Each word has a learning state (stability, difficulty, mastery by review type).
-- Correct answers increase recall interval.
-- Wrong answers reduce stability and bring words back sooner.
-- Progress is saved in browser `localStorage`.
+### 2) Review Session
+
+![Review Session](demo/Review_session.png)
+
+### 3) Learned Words List
+
+![Learned Word List](demo/Learned_word_list.png)
+
+## Why This App
+
+Many vocabulary tools help users _recognize_ words once, but not _retain_ them over time.
+ENGVOCVN addresses this by:
+
+- Prioritizing words that are most urgent to review.
+- Rotating practice types to reduce pattern memorization.
+- Re-exposing weak words immediately after mistakes.
+- Persisting progress in the browser so learning continues naturally day to day.
+
+## Core Features
+
+### Learning + Review Flow
+
+- **Continuous SRS stream**: the app runs as a continuous learning/review pipeline.
+- **Learn mode**: introduces new words while also injecting due review cards.
+- **Review mode**: focuses only on words that were already introduced.
+- **Chunked sessions**: a 50-card session is treated as a progress unit, not a hard reset.
+
+### Rich Practice Types
+
+ENGVOCVN supports multiple review styles to strengthen recall from different angles:
+
+1. Meaning → Word (multiple choice)
+2. Meaning → Word (typing)
+3. Word → Meaning (multiple choice)
+4. Example → Meaning (multiple choice)
+5. Audio → Meaning (multiple choice)
+6. Synonym / Antonym (multiple choice)
+
+### Smart Scheduling Behavior
+
+- **Urgency-first selection** chooses what to review next.
+- **Balanced type selection** prefers unseen or least-used quiz types.
+- **Anti-repeat logic** avoids repetitive review patterns.
+- **Immediate recovery**: wrong answers queue a definition card for the same word.
+
+### Progress Tracking
+
+- Dedicated **Learned Words** panel to inspect learned vocabulary.
+- Per-word learning state stores values such as:
+  - `stability`
+  - `counter`
+  - `distance`
+  - `grow_rate`
+  - `urgency`
+  - `mastery_score`
+  - `RTcounter`
+  - error history queue
+- Pronunciation replay when audio sources are available.
 
 ## Tech Stack
 
-- HTML, CSS, JavaScript (Vanilla, no framework)
-- Static JSON dataset (`data/data.json`)
-- Browser's local storage to persist learning progress
+- **Frontend**: HTML, CSS, Vanilla JavaScript
+- **Data**: static JSON (`data/data.json`)
+- **Persistence**: browser `localStorage`
+- **Deployment**: static hosting (GitHub Pages ready)
 
 ## Project Structure
 
 ```text
 .
 ├─ index.html
+├─ README.md
 ├─ audio/
 ├─ data/
 │  └─ data.json
+├─ demo/
 ├─ font/
 ├─ icon/
 ├─ script/
@@ -54,29 +102,22 @@ GitHub Pages: https://thanhdat7d2.github.io/engvocvn/
    └─ app.css
 ```
 
-## Run Locally
+## Run Locally (Quick)
 
-Because the app loads JSON and ES modules, run it with a local server.
-
-### Option 1: VS Code Live Server
-
-1. Open the project in VS Code.
-2. Install the Live Server extension.
-3. Right-click `index.html` and choose **Open with Live Server**.
-
-### Option 2: Python
+Use any local static server (required for JSON/modules).
 
 ```bash
 python -m http.server 5500
 ```
 
-Open http://localhost:5500
+Open: **http://localhost:5500**
 
 ## Notes
 
 - Audio playback depends on available pronunciation links in your dataset.
-- Use **Delete all learned words** in-app to reset progress.
+- Use **Delete all learned words** in-app to reset local progress.
 
 ## Author
 
-Nguyễn Thành Đạt (GitHub: thanhdat7d2)
+**Nguyễn Thành Đạt**  
+GitHub: [thanhdat7d2](https://github.com/thanhdat7d2)

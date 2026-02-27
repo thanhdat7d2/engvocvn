@@ -49,3 +49,28 @@ export function loadLearnQueueState() {
 export function clearLearnQueueState() {
     localStorage.removeItem("vocab_learn_queue_state");
 }
+
+export function saveBootstrapState(bootstrapState) {
+    localStorage.setItem(
+        "vocab_bootstrap_state",
+        JSON.stringify(bootstrapState)
+    );
+}
+
+export function loadBootstrapState() {
+    const raw = localStorage.getItem("vocab_bootstrap_state");
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+export function clearBootstrapState() {
+    localStorage.removeItem("vocab_bootstrap_state");
+}

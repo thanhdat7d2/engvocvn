@@ -1,81 +1,82 @@
 // reviewEngine.js
 
-function daysBetween(t1, t2) {
-    return Math.max(0, (t2 - t1) / (1000 * 60 * 60 * 24));
+import { recalculateWordMetrics } from "./wordState.js";
+
+function ceilMinOne(value) {
+    return Math.max(1, Math.ceil(value));
 }
 
-function recallProbability(deltaDays, stability) {
-    return Math.exp(-deltaDays / stability);
+function clampGrowRate(value) {
+    return Math.min(1.4, Math.max(1.2, value));
+}
+
+function determineGrowRateOnIncorrect(recentIncorrect, incorrectRatio) {
+    if (recentIncorrect > 3 || incorrectRatio > 0.3) {
+        return 1.2;
+    }
+    if (recentIncorrect === 3 || incorrectRatio > 0.25) {
+        return 1.25;
+    }
+    if (recentIncorrect === 2 || incorrectRatio > 0.2) {
+        return 1.3;
+    }
+    if (recentIncorrect === 1 || incorrectRatio > 0.15) {
+        return 1.35;
+    }
+    return 1.4;
 }
 
 export function processReview(wordState, reviewType, isCorrect) {
-    const now = Date.now();
-
-    const deltaDays = wordState.lastReview
-        ? daysBetween(wordState.lastReview, now)
-        : 0;
-
-    const pRecall = recallProbability(deltaDays, wordState.stability);
-
-    const rtState = wordState.reviewTypeStats[reviewType];
-    rtState.seen += 1;
-
-    if (isCorrect) {
-        // ---------- CORRECT ----------
-        wordState.correctCount += 1;
-        rtState.correct += 1;
-
-        const Snew =
-            wordState.stability *
-            (1 + 0.4 * (1 - pRecall)) *
-            (1 / wordState.difficulty);
-
-        wordState.stability = Snew;
-
-        rtState.mastery =
-            rtState.mastery + 0.2 * (1 - rtState.mastery);
-
-        let factor = 1.0;
-        if (coverage(wordState) >= 5) factor = 1.3;
-        if (averageMastery(wordState) > 0.8) factor = 1.6;
-
-        const nextIntervalDays = Snew * factor;
-
-        wordState.nextReview =
-            now + nextIntervalDays * 24 * 60 * 60 * 1000;
-
-    } else {
-        // ---------- INCORRECT ----------
-        wordState.wrongCount += 1;
-        rtState.wrong += 1;
-
-        wordState.stability = Math.max(
-            0.3,
-            wordState.stability * 0.5
-        );
-
-        wordState.difficulty *= 1.1;
-
-        rtState.mastery *= 0.5;
-
-        const soon = Math.min(0.25, wordState.stability);
-
-        wordState.nextReview =
-            now + soon * 24 * 60 * 60 * 1000;
+    if (!wordState || !wordState.RTcounter) {
+        return {
+            wordState,
+            shouldShowDefinitionImmediately: false
+        };
     }
 
-    wordState.lastReview = now;
+    if (!Array.isArray(wordState.recent_queue)) {
+        wordState.recent_queue = [0, 0, 0, 0, 0];
+    }
 
-    return wordState;
-}
+    const safeTotalSeen = Math.max(1, Number(wordState.total_card_seen) || 1);
 
-export function coverage(wordState) {
-    return Object.values(wordState.reviewTypeStats)
-        .filter(rt => rt.seen > 0).length;
-}
+    if (isCorrect) {
+        wordState.recent_queue.push(0);
+        if (wordState.grow_rate < 1.4) {
+            wordState.grow_rate += 0.07;
+            if (wordState.grow_rate > 1.4) {
+                wordState.grow_rate = 1.4;
+            }
+        }
+        if (wordState.grow_rate > 1.4) {
+            wordState.grow_rate = 1.4;
+        }
 
-export function averageMastery(wordState) {
-    const values = Object.values(wordState.reviewTypeStats)
-        .map(rt => rt.mastery);
-    return values.reduce((a, b) => a + b, 0) / values.length;
+        wordState.distance = ceilMinOne((Number(wordState.distance) || 1) * (Number(wordState.grow_rate) || 1.4));
+        wordState.stability = Math.max(6, wordState.distance / 0.16252);
+        wordState.counter = 0;
+        wordState.RTcounter[reviewType] = (Number(wordState.RTcounter[reviewType]) || 0) + 1;
+    } else {
+        wordState.total_incorrect = (Number(wordState.total_incorrect) || 0) + 1;
+        wordState.recent_queue.push(1);
+
+        const recentIncorrect = wordState.recent_queue.reduce((sum, value) => {
+            return sum + (value ? 1 : 0);
+        }, 0);
+        const incorrectRatio = wordState.total_incorrect / safeTotalSeen;
+
+        wordState.grow_rate = clampGrowRate(determineGrowRateOnIncorrect(recentIncorrect, incorrectRatio));
+        wordState.distance = ceilMinOne((Number(wordState.distance) || 1) / 4);
+        wordState.stability = Math.max(6, wordState.distance / 0.16252);
+        wordState.counter = 0;
+    }
+
+    wordState.recent_queue.shift();
+    wordState.total_card_seen = safeTotalSeen + 1;
+    recalculateWordMetrics(wordState);
+
+    return {
+        wordState,
+        shouldShowDefinitionImmediately: !isCorrect
+    };
 }

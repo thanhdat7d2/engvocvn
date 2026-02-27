@@ -1,22 +1,9 @@
 // scheduler.js
 
-import { averageMastery } from "./reviewEngine.js";
 import { REVIEW_TYPES } from "./wordState.js";
 
 export function computeUrgency(wordState) {
-    const now = Date.now();
-
-    const overdueRatio =
-        (now - wordState.nextReview) /
-        (wordState.stability * 24 * 60 * 60 * 1000);
-
-    const avgMastery = averageMastery(wordState);
-
-    return (
-        0.5 * overdueRatio +
-        0.3 * (1 - avgMastery) +
-        0.2 * wordState.difficulty
-    );
+    return Number(wordState?.urgency) || 0;
 }
 
 export function selectReviewType(wordState, wordEntry) {

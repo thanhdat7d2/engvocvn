@@ -3,17 +3,57 @@ const ASSET_VERSION = window.__ASSET_VERSION__ || Date.now().toString();
 let createInitialWordState;
 let REVIEW_TYPES;
 let processReview;
-let computeUrgency;
+let initializeIntroducedWordState;
+let recalculateWordMetrics;
 let loadState;
 let saveState;
 let clearState;
-let loadLearnQueueState;
-let saveLearnQueueState;
-let clearLearnQueueState;
+let loadBootstrapState;
+let saveBootstrapState;
+let clearBootstrapState;
 
 const SESSION_SIZE = 50;
-const LEARNING_QUEUE_SIZE = 6;
-const LEARNING_GRADUATION_SCORE = 3.8;
+const ACTIVE_POOL = 7;
+const THRESHOLD_STABILITY = 173;
+const BOOTSTRAP_SEQUENCE = [
+    { mode: "definition", slot: 1 },
+    { mode: "review", slot: 1 },
+    { mode: "definition", slot: 2 },
+    { mode: "review", slot: 2 },
+    { mode: "review", slot: 1 },
+    { mode: "definition", slot: 3 },
+    { mode: "review", slot: 2 },
+    { mode: "review", slot: 3 },
+    { mode: "definition", slot: 4 },
+    { mode: "review", slot: 1 },
+    { mode: "review", slot: 4 },
+    { mode: "review", slot: 2 },
+    { mode: "review", slot: 3 },
+    { mode: "definition", slot: 5 },
+    { mode: "review", slot: 5 },
+    { mode: "review", slot: 4 },
+    { mode: "review", slot: 5 },
+    { mode: "review", slot: 1 },
+    { mode: "definition", slot: 6 },
+    { mode: "review", slot: 6 },
+    { mode: "review", slot: 2 },
+    { mode: "review", slot: 3 },
+    { mode: "review", slot: 5 },
+    { mode: "review", slot: 6 },
+    { mode: "review", slot: 4 },
+    { mode: "review", slot: 6 },
+    { mode: "definition", slot: 7 },
+    { mode: "review", slot: 7 },
+    { mode: "review", slot: 1 },
+    { mode: "review", slot: 6 },
+    { mode: "review", slot: 5 },
+    { mode: "review", slot: 7 },
+    { mode: "review", slot: 2 },
+    { mode: "review", slot: 1 },
+    { mode: "review", slot: 7 },
+    { mode: "review", slot: 3 },
+    { mode: "review", slot: 2 }
+];
 
 const progressFill = document.getElementById("progressFill");
 const learnedProgressFill = document.getElementById("learnedProgressFill");
@@ -75,23 +115,23 @@ async function init() {
 }
 
 async function loadDependencies() {
-    const [wordStateModule, reviewEngineModule, schedulerModule, storageModule] = await Promise.all([
+    const [wordStateModule, reviewEngineModule, storageModule] = await Promise.all([
         import(`./wordState.js?v=${ASSET_VERSION}`),
         import(`./reviewEngine.js?v=${ASSET_VERSION}`),
-        import(`./scheduler.js?v=${ASSET_VERSION}`),
         import(`./storage.js?v=${ASSET_VERSION}`)
     ]);
 
     createInitialWordState = wordStateModule.createInitialWordState;
     REVIEW_TYPES = wordStateModule.REVIEW_TYPES;
+    initializeIntroducedWordState = wordStateModule.initializeIntroducedWordState;
+    recalculateWordMetrics = wordStateModule.recalculateWordMetrics;
     processReview = reviewEngineModule.processReview;
-    computeUrgency = schedulerModule.computeUrgency;
     loadState = storageModule.loadState;
     saveState = storageModule.saveState;
     clearState = storageModule.clearState;
-    loadLearnQueueState = storageModule.loadLearnQueueState;
-    saveLearnQueueState = storageModule.saveLearnQueueState;
-    clearLearnQueueState = storageModule.clearLearnQueueState;
+    loadBootstrapState = storageModule.loadBootstrapState;
+    saveBootstrapState = storageModule.saveBootstrapState;
+    clearBootstrapState = storageModule.clearBootstrapState;
 }
 
 async function fetchData() {
@@ -117,22 +157,49 @@ function normalizeStates(savedState, dataLength) {
 
 function ensureWordStateShape(state, id) {
     const base = createInitialWordState(id);
-    const shaped = {
-        ...base,
-        ...state,
-        reviewTypeStats: {
-            ...base.reviewTypeStats
-        }
-    };
+    const shaped = { ...base, ...state, RTcounter: { ...base.RTcounter } };
 
-    Object.keys(base.reviewTypeStats).forEach(type => {
-        shaped.reviewTypeStats[type] = {
-            ...base.reviewTypeStats[type],
-            ...(state?.reviewTypeStats?.[type] || {})
-        };
+    Object.keys(base.RTcounter).forEach(type => {
+        const legacyTypeStat = state?.reviewTypeStats?.[type];
+        const legacySeen = Number(legacyTypeStat?.seen) || 0;
+        const nextCount = Number(state?.RTcounter?.[type]);
+        shaped.RTcounter[type] = Number.isFinite(nextCount)
+            ? Math.max(0, nextCount)
+            : Math.max(0, legacySeen);
     });
 
+    if (!Array.isArray(shaped.recent_queue)) {
+        shaped.recent_queue = [0, 0, 0, 0, 0];
+    } else if (shaped.recent_queue.length !== 5) {
+        const tail = shaped.recent_queue.map(v => (v ? 1 : 0)).slice(-5);
+        while (tail.length < 5) {
+            tail.unshift(0);
+        }
+        shaped.recent_queue = tail;
+    }
+
+    if (typeof state?.learned === "boolean") {
+        if (state.learned) {
+            shaped.total_card_seen = Math.max(1, Number(shaped.total_card_seen) || 1);
+        } else {
+            const hasRtHistory = Object.values(shaped.RTcounter || {}).some(count => (Number(count) || 0) > 0);
+            const hasIncorrectHistory = (Number(shaped.total_incorrect) || 0) > 0;
+            if (!hasRtHistory && !hasIncorrectHistory) {
+                shaped.total_card_seen = 0;
+            }
+        }
+    }
+
+    if (!Number.isInteger(shaped.bootstrap_slot) || shaped.bootstrap_slot < 1) {
+        shaped.bootstrap_slot = null;
+    }
+
+    recalculateWordMetrics(shaped);
     return shaped;
+}
+
+function isWordIntroduced(wordState) {
+    return (Number(wordState?.total_card_seen) || 0) > 0;
 }
 
 function wireEvents() {
@@ -250,9 +317,19 @@ function buildTypingHintMask(vocab) {
         return "";
     }
 
+    const length = clean.length;
+    if (length === 1) {
+        return `${clean} (${length} letter)`;
+    }
+
     const firstChar = clean[0];
-    const hiddenChars = "_".repeat(Math.max(0, clean.length - 1));
-    return `${firstChar}${hiddenChars}`;
+    const lastChar = clean[length - 1];
+    const middleSlots = Array(Math.max(0, length - 2)).fill("_").join(" ");
+    const core = middleSlots
+        ? `${firstChar} ${middleSlots} ${lastChar}`
+        : `${firstChar} ${lastChar}`;
+
+    return `${core} (${length} letters)`;
 }
 
 function submitTypingAnswerForCurrentCard() {
@@ -303,9 +380,40 @@ function populateAppInfo() {
 }
 
 function goToNextCard() {
+    // const finishedCard = session[currentIndex];
     markDefinitionAsLearnedIfNeeded();
+    applyPostCardCounterProgress();
+    refreshGlobalSrsStats();
+    // logSrsDebugAfterCard(finishedCard);
+    saveState(wordStates);
     currentIndex += 1;
     renderCurrentCard();
+}
+
+function logSrsDebugAfterCard(card) {
+    const introduced = wordStates
+        .filter(state => isWordIntroduced(state))
+        .map(state => ({
+            id: state.id,
+            word: data[state.id]?.vocab || `#${state.id}`,
+            stability: Number((Number(state.stability) || 0).toFixed(4))
+        }));
+
+    console.log("[SRS DEBUG]", {
+        cardIndex: currentIndex + 1,
+        card: card
+            ? {
+                wordId: card.wordId,
+                word: data[card.wordId]?.vocab || `#${card.wordId}`,
+                cardType: card.cardType
+            }
+            : null,
+        learnedWordStabilityList: introduced,
+        systemStability: Number((sessionRuntime?.systemStability || 0).toFixed(6)),
+        activeWord: sessionRuntime?.activeWordCount || 0,
+        bootstrapStep: sessionRuntime?.bootstrapStep ?? BOOTSTRAP_SEQUENCE.length,
+        bootstrapActive: isBootstrapActive()
+    });
 }
 
 function markDefinitionAsLearnedIfNeeded() {
@@ -315,13 +423,14 @@ function markDefinitionAsLearnedIfNeeded() {
     }
 
     const wordState = wordStates[card.wordId];
-    if (!wordState || wordState.learned) {
+    if (!wordState) {
         return;
     }
 
-    wordState.learned = true;
-    wordState.introducedAt = Date.now();
-    saveState(wordStates);
+    if (!isWordIntroduced(wordState)) {
+        const initialized = initializeIntroducedWordState(wordState);
+        wordStates[card.wordId] = initialized;
+    }
 }
 
 function startSession(nextMode) {
@@ -339,31 +448,37 @@ function startSession(nextMode) {
 }
 
 function createSessionRuntime(nextMode) {
-    const learnedWords = wordStates.filter(w => w.learned);
-    const queueState = nextMode === "learn"
-        ? createLearnQueueState(loadLearnQueueState ? loadLearnQueueState() : null)
-        : { queuedLearningWordIds: [], pendingDefinitionWordIds: [], newWordOrderIds: [], nextWordCursor: 0 };
-
     const runtime = {
         mode: nextMode,
         targetSize: SESSION_SIZE,
-        learnedReviewOrder: orderByUrgencyWithShuffledTies(learnedWords),
-        learnedCursor: 0,
-        newWordOrderIds: queueState.newWordOrderIds,
-        nextWordCursor: queueState.nextWordCursor,
-        queuedLearningWordIds: queueState.queuedLearningWordIds,
-        pendingDefinitionWordIds: queueState.pendingDefinitionWordIds,
-        shownDefinitionWordIds: new Set(),
-        cardsSinceDefinition: Number.MAX_SAFE_INTEGER,
-        nextDefinitionGap: randomPreferredDefinitionGap(),
-        wrongStreakByWordId: new Map(),
-        remedialDefinitionQueue: []
+        forceDefinitionWordId: null,
+        activeWordCount: 0,
+        systemStability: 0,
+        lastReviewWordId: null,
+        lastReviewType: null,
+        secondLastReviewWordId: null,
+        bootstrapStep: BOOTSTRAP_SEQUENCE.length
     };
 
     if (nextMode === "learn") {
-        persistLearnQueueState(runtime);
+        const introducedCount = wordStates.filter(state => isWordIntroduced(state)).length;
+        const savedBootstrap = loadBootstrapState ? loadBootstrapState() : null;
+        const rawStep = Number(savedBootstrap?.step);
+        const hasSavedStep = Number.isInteger(rawStep);
+
+        if (hasSavedStep) {
+            runtime.bootstrapStep = Math.max(0, Math.min(rawStep, BOOTSTRAP_SEQUENCE.length));
+        } else if (introducedCount === 0) {
+            runtime.bootstrapStep = 0;
+            persistBootstrapStep(runtime.bootstrapStep);
+        }
+
+        if (introducedCount === 0 && runtime.bootstrapStep >= BOOTSTRAP_SEQUENCE.length) {
+            runtime.forceDefinitionWordId = pickRandomUnintroducedWordId();
+        }
     }
 
+    updateRuntimeSrsStats(runtime);
     return runtime;
 }
 
@@ -382,255 +497,245 @@ function generateNextCard() {
         return null;
     }
 
-    const remedialWordId = popNextRemedialDefinitionWordId();
-    if (remedialWordId != null) {
-        sessionRuntime.shownDefinitionWordIds.add(remedialWordId);
-        sessionRuntime.cardsSinceDefinition = 0;
-        sessionRuntime.nextDefinitionGap = randomPreferredDefinitionGap();
+    if (sessionRuntime.forceDefinitionWordId != null) {
+        const forcedWordId = sessionRuntime.forceDefinitionWordId;
+        sessionRuntime.forceDefinitionWordId = null;
         return {
-            wordId: remedialWordId,
+            wordId: forcedWordId,
             cardType: "definition"
         };
     }
 
-    if (shouldShowNewDefinitionNow()) {
-        const wordId = sessionRuntime.pendingDefinitionWordIds.shift();
+    if (isBootstrapActive()) {
+        const bootstrapCard = generateNextBootstrapCard();
+        if (bootstrapCard) {
+            return bootstrapCard;
+        }
+    }
+
+    if (mode === "learn" && shouldIntroduceNewWord()) {
+        const newWordId = pickRandomUnintroducedWordId();
+        if (newWordId != null) {
+            return {
+                wordId: newWordId,
+                cardType: "definition"
+            };
+        }
+    }
+
+    const reviewWordId = pickNextReviewWordId();
+    if (reviewWordId == null) {
+        return null;
+    }
+
+    return {
+        wordId: reviewWordId,
+        cardType: pickReviewTypeForWord(reviewWordId)
+    };
+}
+
+function shouldIntroduceNewWord() {
+    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
+        return false;
+    }
+
+    const hasUnintroduced = wordStates.some(state => !isWordIntroduced(state));
+    if (!hasUnintroduced) {
+        return false;
+    }
+
+    return sessionRuntime.activeWordCount < ACTIVE_POOL
+        && sessionRuntime.systemStability > THRESHOLD_STABILITY;
+}
+
+function isBootstrapActive() {
+    return Boolean(
+        sessionRuntime
+        && sessionRuntime.mode === "learn"
+        && sessionRuntime.bootstrapStep < BOOTSTRAP_SEQUENCE.length
+    );
+}
+
+function persistBootstrapStep(step) {
+    if (!saveBootstrapState) {
+        return;
+    }
+
+    saveBootstrapState({ step: Math.max(0, Math.min(step, BOOTSTRAP_SEQUENCE.length)) });
+}
+
+function getBootstrapWordIdBySlot(slot) {
+    const match = wordStates.find(state => Number(state.bootstrap_slot) === slot && isWordIntroduced(state));
+    return match ? match.id : null;
+}
+
+function generateNextBootstrapCard() {
+    if (!sessionRuntime) {
+        return null;
+    }
+
+    const step = sessionRuntime.bootstrapStep;
+    const script = BOOTSTRAP_SEQUENCE[step];
+    if (!script) {
+        return null;
+    }
+
+    let wordId = getBootstrapWordIdBySlot(script.slot);
+
+    if (script.mode === "definition") {
+        if (wordId == null) {
+            wordId = pickRandomUnintroducedWordId();
+        }
         if (wordId == null) {
             return null;
         }
-        sessionRuntime.shownDefinitionWordIds.add(wordId);
-        sessionRuntime.cardsSinceDefinition = 0;
-        sessionRuntime.nextDefinitionGap = randomPreferredDefinitionGap();
+
+        const wordState = wordStates[wordId];
+        if (wordState) {
+            wordState.bootstrap_slot = script.slot;
+        }
+
+        sessionRuntime.bootstrapStep += 1;
+        persistBootstrapStep(sessionRuntime.bootstrapStep);
+
         return {
             wordId,
             cardType: "definition"
         };
     }
 
-    const reviewWord = pickNextReviewWordState();
-    if (!reviewWord) {
+    if (wordId == null) {
+        wordId = pickNextReviewWordId();
+    }
+    if (wordId == null) {
         return null;
     }
 
-    sessionRuntime.cardsSinceDefinition += 1;
+    sessionRuntime.bootstrapStep += 1;
+    persistBootstrapStep(sessionRuntime.bootstrapStep);
+
     return {
-        wordId: reviewWord.id,
-        cardType: pickCardTypeAvoidingAdjacentDuplicate(reviewWord)
+        wordId,
+        cardType: pickReviewTypeForWord(wordId)
     };
 }
 
-function shouldShowNewDefinitionNow() {
-    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
-        return false;
-    }
+function pickRandomUnintroducedWordId() {
+    const candidates = wordStates
+        .map((state, index) => ({ state, index }))
+        .filter(item => item.state && !isWordIntroduced(item.state))
+        .map(item => item.index);
 
-    refillLearningQueueIfNeeded();
-
-    if (!sessionRuntime.pendingDefinitionWordIds.length) {
-        return false;
-    }
-
-    const previousCard = session[session.length - 1];
-    if (previousCard?.cardType === "definition") {
-        return false;
-    }
-
-    if (!sessionRuntime.learnedReviewOrder.length && !sessionRuntime.shownDefinitionWordIds.size) {
-        return true;
-    }
-
-    return sessionRuntime.cardsSinceDefinition >= sessionRuntime.nextDefinitionGap;
-}
-
-function popNextRemedialDefinitionWordId() {
-    if (!sessionRuntime || !sessionRuntime.remedialDefinitionQueue.length) {
-        return null;
-    }
-
-    const previousCard = session[session.length - 1];
-    if (previousCard?.cardType === "definition") {
-        return null;
-    }
-
-    return sessionRuntime.remedialDefinitionQueue.shift();
-}
-
-function pickNextReviewWordState() {
-    const candidates = buildEligibleReviewWordStates();
     if (!candidates.length) {
         return null;
     }
 
-    const recentReviewWordIds = getRecentReviewWordIds();
-    const blockedWordId = recentReviewWordIds.length >= 2
-        && recentReviewWordIds[0] === recentReviewWordIds[1]
-        ? recentReviewWordIds[0]
-        : null;
-
-    let ordered = orderByUrgencyWithShuffledTies(candidates);
-    if (blockedWordId != null) {
-        const withoutBlocked = ordered.filter(word => word.id !== blockedWordId);
-        if (withoutBlocked.length) {
-            ordered = withoutBlocked;
-        }
-    }
-
-    return ordered[0] || null;
+    const randomIndex = Math.floor(Math.random() * candidates.length);
+    return candidates[randomIndex];
 }
 
-function buildEligibleReviewWordStates() {
-    if (!sessionRuntime) {
-        return [];
+function pickNextReviewWordId() {
+    const candidates = wordStates.filter(state => isWordIntroduced(state));
+    if (!candidates.length) {
+        return null;
     }
 
-    const candidates = [];
+    let minUrgency = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < candidates.length; i += 1) {
+        minUrgency = Math.min(minUrgency, Number(candidates[i].urgency));
+    }
 
-    sessionRuntime.learnedReviewOrder.forEach(word => {
-        const currentState = wordStates[word.id];
-        if (currentState?.learned && shouldIncludeLearnedWordInCurrentCard(currentState)) {
-            candidates.push(currentState);
+    const tied = candidates.filter(state => Number(state.urgency) === minUrgency);
+    if (!tied.length) {
+        return candidates[0].id;
+    }
+
+    let pool = tied;
+
+    if (sessionRuntime?.secondLastReviewWordId != null
+        && sessionRuntime.secondLastReviewWordId === sessionRuntime.lastReviewWordId) {
+        const notTriple = pool.filter(state => state.id !== sessionRuntime.lastReviewWordId);
+        if (notTriple.length) {
+            pool = notTriple;
         }
-    });
+    }
 
-    if (!candidates.length && sessionRuntime.mode === "review") {
-        const fallbackLearned = sessionRuntime.learnedReviewOrder
-            .map(word => wordStates[word.id])
-            .find(state => state?.learned);
-
-        if (fallbackLearned) {
-            candidates.push(fallbackLearned);
+    if (pool.length > 1 && sessionRuntime?.lastReviewWordId != null) {
+        const excludingPrev = pool.filter(state => state.id !== sessionRuntime.lastReviewWordId);
+        if (excludingPrev.length) {
+            pool = excludingPrev;
         }
     }
 
-    if (sessionRuntime.mode === "learn") {
-        sessionRuntime.shownDefinitionWordIds.forEach(wordId => {
-            const word = wordStates[wordId];
-            if (word && !candidates.some(item => item.id === word.id)) {
-                candidates.push(word);
-            }
-        });
-    }
-
-    return candidates;
+    return pool[Math.floor(Math.random() * pool.length)].id;
 }
 
-function refillLearningQueueIfNeeded() {
-    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
-        return;
-    }
-
-    if (!canIntroduceAnotherNewWord()) {
-        return;
-    }
-
-    let changed = false;
-
-    while (
-        sessionRuntime.pendingDefinitionWordIds.length < LEARNING_QUEUE_SIZE
-        && sessionRuntime.nextWordCursor < sessionRuntime.newWordOrderIds.length
-    ) {
-        const nextWordId = sessionRuntime.newWordOrderIds[sessionRuntime.nextWordCursor];
-        sessionRuntime.nextWordCursor += 1;
-
-        const candidate = wordStates[nextWordId];
-        if (!candidate || candidate.learned) {
-            continue;
-        }
-
-        if (!sessionRuntime.queuedLearningWordIds.includes(nextWordId)) {
-            sessionRuntime.queuedLearningWordIds.push(nextWordId);
-        }
-
-        if (sessionRuntime.pendingDefinitionWordIds.includes(nextWordId)) {
-            continue;
-        }
-
-        sessionRuntime.pendingDefinitionWordIds.push(nextWordId);
-        changed = true;
-        break;
-    }
-
-    if (changed) {
-        persistLearnQueueState(sessionRuntime);
-    }
-}
-
-function maybeGraduateLearningWord(wordId) {
-    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
-        return;
-    }
-
-    if (!sessionRuntime.queuedLearningWordIds.includes(wordId)) {
-        return;
-    }
-
+function pickReviewTypeForWord(wordId) {
     const wordState = wordStates[wordId];
-    if (!wordState) {
-        return;
+    const eligibleTypes = getEligibleReviewTypesForWord(wordId);
+
+    if (!wordState || !eligibleTypes.length) {
+        return REVIEW_TYPES.RT3;
     }
 
-    if (!isWordReadyToGraduate(wordId, wordState)) {
-        return;
+    const unseenTypes = eligibleTypes.filter(type => (wordState.RTcounter?.[type] || 0) === 0);
+    let candidateTypes = unseenTypes.length
+        ? [...unseenTypes]
+        : (() => {
+            const minCount = Math.min(...eligibleTypes.map(type => wordState.RTcounter?.[type] || 0));
+            return eligibleTypes.filter(type => (wordState.RTcounter?.[type] || 0) === minCount);
+        })();
+
+    if (sessionRuntime?.lastReviewWordId === wordId && sessionRuntime?.lastReviewType) {
+        const filtered = candidateTypes.filter(type => type !== sessionRuntime.lastReviewType);
+        if (filtered.length) {
+            candidateTypes = filtered;
+        }
     }
 
-    sessionRuntime.queuedLearningWordIds = sessionRuntime.queuedLearningWordIds.filter(id => id !== wordId);
-    sessionRuntime.pendingDefinitionWordIds = sessionRuntime.pendingDefinitionWordIds.filter(id => id !== wordId);
-    refillLearningQueueIfNeeded();
-    persistLearnQueueState(sessionRuntime);
+    return candidateTypes[Math.floor(Math.random() * candidateTypes.length)];
 }
 
-function createLearnQueueState(savedQueueState) {
-    const eligibleIds = wordStates
-        .map((state, index) => ({ state, index }))
-        .filter(item => item.state && !item.state.learned)
-        .map(item => item.index);
-    const eligibleIdSet = new Set(eligibleIds);
-
-    const savedOrder = Array.isArray(savedQueueState?.newWordOrderIds)
-        ? savedQueueState.newWordOrderIds
-            .filter(id => Number.isInteger(id) && eligibleIdSet.has(id))
-            .filter((id, index, arr) => arr.indexOf(id) === index)
-        : [];
-
-    const missingIds = eligibleIds.filter(id => !savedOrder.includes(id));
-    const newWordOrderIds = [...savedOrder, ...shuffle(missingIds)];
-
-    let nextWordCursor = Number.isInteger(savedQueueState?.nextWordCursor)
-        ? savedQueueState.nextWordCursor
-        : 0;
-    nextWordCursor = Math.max(0, Math.min(nextWordCursor, newWordOrderIds.length));
-
-    return {
-        queuedLearningWordIds: [],
-        pendingDefinitionWordIds: [],
-        newWordOrderIds,
-        nextWordCursor
-    };
-}
-
-function persistLearnQueueState(runtime) {
-    if (!saveLearnQueueState || !runtime || runtime.mode !== "learn") {
+function applyPostCardCounterProgress() {
+    const card = session[currentIndex];
+    if (!card) {
         return;
     }
 
-    saveLearnQueueState({
-        newWordOrderIds: runtime.newWordOrderIds,
-        nextWordCursor: runtime.nextWordCursor
+    const excludedWordId = card.cardType === "definition" ? null : card.wordId;
+
+    wordStates.forEach(state => {
+        if (!isWordIntroduced(state) || state.id === excludedWordId) {
+            return;
+        }
+
+        state.counter = Math.max(0, Number(state.counter) || 0) + 1;
+        recalculateWordMetrics(state);
     });
 }
 
-function getRecentReviewWordIds() {
-    const ids = [];
+function refreshGlobalSrsStats() {
+    updateRuntimeSrsStats(sessionRuntime);
+}
 
-    for (let i = session.length - 1; i >= 0 && ids.length < 2; i -= 1) {
-        const card = session[i];
-        if (card.cardType === "definition") {
-            continue;
+function updateRuntimeSrsStats(targetRuntime) {
+    const introduced = wordStates.filter(state => isWordIntroduced(state));
+    if (!introduced.length) {
+        if (targetRuntime) {
+            targetRuntime.activeWordCount = 0;
+            targetRuntime.systemStability = 0;
         }
-        ids.push(card.wordId);
+        return;
     }
 
-    return ids;
+    const activeWordCount = introduced.filter(state => Number(state.stability) < THRESHOLD_STABILITY).length;
+    const sumStability = introduced.reduce((sum, state) => sum + (Number(state.stability) || 6), 0);
+    const systemStability = sumStability / introduced.length;
+
+    if (targetRuntime) {
+        targetRuntime.activeWordCount = activeWordCount;
+        targetRuntime.systemStability = systemStability;
+    }
 }
 
 function setModeButtons() {
@@ -659,7 +764,7 @@ function renderLearnedWordsPanel() {
     learnedWordsList.innerHTML = "";
 
     const learned = wordStates
-        .filter(state => state.learned && data[state.id])
+        .filter(state => isWordIntroduced(state) && data[state.id])
         .sort((a, b) => {
             const scoreDiff = scoreOnFive(b) - scoreOnFive(a);
             if (Math.abs(scoreDiff) > 0.0001) {
@@ -734,12 +839,11 @@ function renderLearnedWordsPanel() {
         meaning.textContent = `${entry.meaning_vi || "-"} (${formatPos(entry?.pos)})`;
         info.appendChild(meaning);
 
-        const score = scoreOnFive(state);
-        const scorePercent = Math.max(0, Math.min(100, (score / 5) * 100));
+        const scorePercent = Math.max(1, Math.min(100, Number(state.mastery_score) || 1));
 
         const scorePie = document.createElement("div");
         scorePie.className = "score-pie";
-        scorePie.setAttribute("aria-label", `Score ${Math.round(scorePercent)} percent`);
+        scorePie.setAttribute("aria-label", `Mastery ${Math.round(scorePercent)} percent`);
         scorePie.style.background = `conic-gradient(#2563eb ${scorePercent}%, #e5e7eb 0)`;
 
         row.appendChild(info);
@@ -762,9 +866,7 @@ function openDefinitionFromLearnedWord(wordId) {
     currentIndex = 0;
 
     if (sessionRuntime && sessionRuntime.mode === "learn") {
-        sessionRuntime.shownDefinitionWordIds.add(wordId);
-        sessionRuntime.cardsSinceDefinition = 0;
-        sessionRuntime.nextDefinitionGap = randomPreferredDefinitionGap();
+        sessionRuntime.forceDefinitionWordId = null;
     }
 
     renderCurrentCard();
@@ -795,25 +897,20 @@ function renderCurrentCard() {
 
     showPromptOnly();
     renderReviewCard(card, entry);
-
-    if (!feedbackText.textContent && shouldShowLearningGateHint()) {
-        feedbackText.textContent = "Master current words first to unlock new words.";
-        feedbackText.className = "hint";
-    }
 }
 
 function renderReviewCard(card, entry) {
-    const distractors = pickDistractors(card.wordId, 3);
     const singleWord = isSingleWord(entry?.vocab);
     const canUseAudio = singleWord && Boolean(entry?.pron) && isOnline();
 
     if (card.cardType === REVIEW_TYPES.RT1) {
+        const correctVocab = (entry.vocab || "").trim();
         promptText.innerHTML = `
             <span class="meaning-mcq-text">${escapeHtml(entry.meaning_vi || "")}</span>
             <span class="meaning-mcq-pos">(${escapeHtml(formatPos(entry?.pos))})</span>
         `;
-        const options = shuffle([entry.vocab, ...distractors.map(x => x.vocab)]);
-        renderChoiceButtons(card, entry, options, option => option === entry.vocab, `Answer: ${entry.vocab}`);
+        const options = buildUniqueMcqOptions(card.wordId, "vocab", 4);
+        renderChoiceButtons(card, entry, options, option => option === correctVocab, `Answer: ${correctVocab}`);
         return;
     }
 
@@ -835,27 +932,30 @@ function renderReviewCard(card, entry) {
     }
 
     if (card.cardType === REVIEW_TYPES.RT3) {
+        const correctMeaning = (entry.meaning_vi || "").trim();
         renderWordPromptWithSpeaker(entry, card);
-        const options = shuffle([entry.meaning_vi, ...distractors.map(x => x.meaning_vi)]);
-        renderChoiceButtons(card, entry, options, option => option === entry.meaning_vi, `Answer: ${entry.meaning_vi}`);
+        const options = buildUniqueMcqOptions(card.wordId, "meaning", 4);
+        renderChoiceButtons(card, entry, options, option => option === correctMeaning, `Answer: ${correctMeaning}`);
         return;
     }
 
     if (card.cardType === REVIEW_TYPES.RT4) {
+        const correctMeaning = (entry.meaning_vi || "").trim();
         const sample = Array.isArray(entry.example) ? (entry.example[0] || "") : "";
         promptText.innerHTML = `${renderExampleWithFallback(sample, entry.vocab)}`;
-        const options = shuffle([entry.meaning_vi, ...distractors.map(x => x.meaning_vi)]);
-        renderChoiceButtons(card, entry, options, option => option === entry.meaning_vi, `Answer: ${entry.meaning_vi}`);
+        const options = buildUniqueMcqOptions(card.wordId, "meaning", 4);
+        renderChoiceButtons(card, entry, options, option => option === correctMeaning, `Answer: ${correctMeaning}`);
         return;
     }
 
     if (card.cardType === REVIEW_TYPES.RT5 && canUseAudio) {
+        const correctMeaning = (entry.meaning_vi || "").trim();
         promptText.textContent = "";
         audioWrap.classList.remove("hidden");
         pronAudio.src = entry.pron;
         playPronunciation();
-        const options = shuffle([entry.meaning_vi, ...distractors.map(x => x.meaning_vi)]);
-        renderChoiceButtons(card, entry, options, option => option === entry.meaning_vi, `Answer: ${entry.meaning_vi}`);
+        const options = buildUniqueMcqOptions(card.wordId, "meaning", 4);
+        renderChoiceButtons(card, entry, options, option => option === correctMeaning, `Answer: ${correctMeaning}`);
         return;
     }
 
@@ -873,9 +973,75 @@ function renderReviewCard(card, entry) {
         }
     }
 
+    const correctMeaning = (entry.meaning_vi || "").trim();
     renderWordPromptWithSpeaker(entry, card);
-    const options = shuffle([entry.meaning_vi, ...distractors.map(x => x.meaning_vi)]);
-    renderChoiceButtons(card, entry, options, option => option === entry.meaning_vi, `Answer: ${entry.meaning_vi}`);
+    const options = buildUniqueMcqOptions(card.wordId, "meaning", 4);
+    renderChoiceButtons(card, entry, options, option => option === correctMeaning, `Answer: ${correctMeaning}`);
+}
+
+function buildUniqueMcqOptions(correctId, field, desiredCount = 4) {
+    const entry = data[correctId] || {};
+    const correctValue = field === "vocab"
+        ? (entry.vocab || "").trim()
+        : (entry.meaning_vi || "").trim();
+
+    const distractors = pickDistractors(correctId, Math.max(0, desiredCount - 1));
+    const primary = distractors.map(item => {
+        return field === "vocab"
+            ? (item?.vocab || "").trim()
+            : (item?.meaning_vi || "").trim();
+    });
+
+    const options = [];
+    const seen = new Set();
+    const pushUnique = value => {
+        if (!value) {
+            return;
+        }
+        const key = value.toLowerCase();
+        if (seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        options.push(value);
+    };
+
+    pushUnique(correctValue);
+    primary.forEach(pushUnique);
+
+    if (options.length < desiredCount) {
+        const targetPos = (entry?.pos || "").trim().toLowerCase();
+        const samePosPool = shuffle(
+            data
+                .map((item, index) => ({ item, index }))
+                .filter(pair => pair.index !== correctId)
+                .filter(pair => ((pair.item?.pos || "").trim().toLowerCase() === targetPos))
+                .map(pair => field === "vocab"
+                    ? (pair.item?.vocab || "").trim()
+                    : (pair.item?.meaning_vi || "").trim())
+                .filter(Boolean)
+        );
+
+        for (let i = 0; i < samePosPool.length && options.length < desiredCount; i += 1) {
+            pushUnique(samePosPool[i]);
+        }
+    }
+
+    if (options.length < desiredCount) {
+        const fallbackPool = shuffle(
+            data
+                .map(item => field === "vocab"
+                    ? (item?.vocab || "").trim()
+                    : (item?.meaning_vi || "").trim())
+                .filter(Boolean)
+        );
+
+        for (let i = 0; i < fallbackPool.length && options.length < desiredCount; i += 1) {
+            pushUnique(fallbackPool[i]);
+        }
+    }
+
+    return shuffle(options.slice(0, desiredCount));
 }
 
 function renderLexicalRelationQuiz(card, entry, relationType) {
@@ -1062,24 +1228,20 @@ function handleAnswered(card, isCorrect, correctText) {
     answered = true;
 
     const wordState = wordStates[card.wordId];
-    processReview(wordState, card.cardType, isCorrect);
+    const reviewResult = processReview(wordState, card.cardType, isCorrect);
 
     if (sessionRuntime) {
-        const prev = sessionRuntime.wrongStreakByWordId.get(card.wordId) || 0;
-        sessionRuntime.wrongStreakByWordId.set(card.wordId, isCorrect ? 0 : prev + 1);
+        sessionRuntime.secondLastReviewWordId = sessionRuntime.lastReviewWordId;
+        sessionRuntime.lastReviewWordId = card.wordId;
+        sessionRuntime.lastReviewType = card.cardType;
 
-        const wrongStreak = sessionRuntime.wrongStreakByWordId.get(card.wordId) || 0;
-        const score = scoreOnFive(wordState);
-        const alreadyQueued = sessionRuntime.remedialDefinitionQueue.includes(card.wordId);
-        const shouldForceDefinitionNow = wordState.learned && score <= 2.4;
-
-        if (!isCorrect && !alreadyQueued && (shouldForceDefinitionNow || (wrongStreak >= 2 && score <= 2.2))) {
-            sessionRuntime.remedialDefinitionQueue.push(card.wordId);
+        if (reviewResult.shouldShowDefinitionImmediately) {
+            sessionRuntime.forceDefinitionWordId = card.wordId;
         }
     }
 
+    refreshGlobalSrsStats();
     saveState(wordStates);
-    maybeGraduateLearningWord(card.wordId);
     playAnswerSound(isCorrect);
 
     if (isTypingQuizCard(card)) {
@@ -1094,17 +1256,9 @@ function handleAnswered(card, isCorrect, correctText) {
 }
 
 function scoreOnFive(wordState) {
-    const total = wordState.correctCount + wordState.wrongCount;
-    const accuracy = total > 0 ? wordState.correctCount / total : 0;
-    const stabilityScore = Math.min(wordState.stability / 5, 1);
-    const masteryScore = Math.min(
-        Object.values(wordState.reviewTypeStats).reduce((sum, item) => sum + item.mastery, 0) /
-        Math.max(1, Object.values(wordState.reviewTypeStats).length),
-        1
-    );
-
-    const weighted = (accuracy * 0.5) + (stabilityScore * 0.3) + (masteryScore * 0.2);
-    return Math.max(1, weighted * 5);
+    const mastery = Number(wordState?.mastery_score);
+    const safeMastery = Number.isFinite(mastery) ? mastery : 1;
+    return Math.max(1, Math.min(5, safeMastery / 20));
 }
 
 function resetProgress() {
@@ -1114,8 +1268,8 @@ function resetProgress() {
     }
 
     clearState();
-    if (clearLearnQueueState) {
-        clearLearnQueueState();
+    if (clearBootstrapState) {
+        clearBootstrapState();
     }
     wordStates = data.map((_, i) => createInitialWordState(i));
     saveState(wordStates);
@@ -1130,28 +1284,44 @@ function pickDistractors(correctId, count) {
         .filter(item => item.index !== correctId && item.pos === targetPos)
         .map(item => item.index);
 
-    const learnedIds = samePosIds.filter(id => wordStates[id]?.learned);
-    const unlearnedIds = samePosIds.filter(id => !wordStates[id]?.learned);
+    const learnedIds = samePosIds.filter(id => isWordIntroduced(wordStates[id]));
+    const unlearnedIds = samePosIds.filter(id => !isWordIntroduced(wordStates[id]));
 
     const selectedIds = [];
     const includeLearnedSometimes = learnedIds.length > 0 && Math.random() < 0.4;
 
     if (includeLearnedSometimes) {
-        const learnedPool = shuffle(learnedIds);
-        selectedIds.push(learnedPool[0]);
+        selectedIds.push(shuffle(learnedIds)[0]);
     }
 
-    const remainingPool = shuffle([...unlearnedIds, ...learnedIds.filter(id => !selectedIds.includes(id))]);
-    for (let i = 0; i < remainingPool.length && selectedIds.length < count; i += 1) {
-        selectedIds.push(remainingPool[i]);
+    const prioritizedPool = shuffle([
+        ...unlearnedIds,
+        ...learnedIds.filter(id => !selectedIds.includes(id))
+    ]);
+
+    for (let i = 0; i < prioritizedPool.length && selectedIds.length < count; i += 1) {
+        selectedIds.push(prioritizedPool[i]);
     }
 
-    const picks = [];
-    for (let i = 0; i < selectedIds.length && picks.length < count; i += 1) {
-        picks.push(data[selectedIds[i]]);
+    if (selectedIds.length < count) {
+        const fallbackIds = shuffle(
+            (samePosIds.length
+                ? samePosIds
+                : data
+                    .map((_, index) => index)
+                    .filter(index => index !== correctId))
+                .filter(id => !selectedIds.includes(id))
+        );
+
+        for (let i = 0; i < fallbackIds.length && selectedIds.length < count; i += 1) {
+            selectedIds.push(fallbackIds[i]);
+        }
     }
 
-    return picks;
+    return selectedIds
+        .slice(0, count)
+        .map(id => data[id])
+        .filter(Boolean);
 }
 
 function shuffle(arr) {
@@ -1246,25 +1416,32 @@ function buildDefinitionMetaHtml(entry) {
             .map(item => (typeof item === "string" ? item.trim() : ""))
             .filter(Boolean)
         : [];
-    const examplesHtml = examples.length
-        ? examples.map(example => `<p class="definition-example-line">${renderExampleWithFallback(example, entry?.vocab || "", false)}</p>`).join("")
+    const randomExample = examples.length
+        ? examples[Math.floor(Math.random() * examples.length)]
+        : "";
+    const examplesHtml = randomExample
+        ? `<p class="definition-example-line">${renderExampleWithFallback(randomExample, entry?.vocab || "", false)}</p>`
         : "<p class=\"definition-example-line\">-</p>";
     const synonyms = normalizeWordItems(entry?.synonym);
     const antonyms = normalizeWordItems(entry?.antonym);
     const synonymsHtml = synonyms.length
-        ? synonyms.map(item => `<li>${escapeHtml(item)}</li>`).join("")
-        : "<li>-</li>";
+        ? [
+            `<p class="definition-section-title">Synonym:</p>`,
+            `<ul class="definition-word-list">${synonyms.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+        ].join("")
+        : "";
     const antonymsHtml = antonyms.length
-        ? antonyms.map(item => `<li>${escapeHtml(item)}</li>`).join("")
-        : "<li>-</li>";
+        ? [
+            `<p class="definition-section-title">Antonym:</p>`,
+            `<ul class="definition-word-list">${antonyms.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+        ].join("")
+        : "";
 
     return [
         `<div class="definition-meta">`,
         `<div class="definition-example-box">${examplesHtml}</div>`,
-        `<p class="definition-section-title">Synonym:</p>`,
-        `<ul class="definition-word-list">${synonymsHtml}</ul>`,
-        `<p class="definition-section-title">Antonym:</p>`,
-        `<ul class="definition-word-list">${antonymsHtml}</ul>`,
+        synonymsHtml,
+        antonymsHtml,
         `</div>`
     ].join("");
 }
@@ -1327,111 +1504,6 @@ function hasPronunciationForSingleWord(entry) {
     return isSingleWord(entry?.vocab) && /\.mp3(\?|$)/i.test(pron);
 }
 
-function randomPreferredDefinitionGap() {
-    const roll = Math.random();
-    if (roll < 0.15) {
-        return 1;
-    }
-    if (roll < 0.7) {
-        return 2;
-    }
-    return 3;
-}
-
-function shouldIncludeLearnedWordInCurrentCard(wordState) {
-    const now = Date.now();
-    const nextReview = Number.isFinite(wordState?.nextReview) ? wordState.nextReview : 0;
-    const dayMs = 24 * 60 * 60 * 1000;
-
-    if (!nextReview || nextReview <= now) {
-        return true;
-    }
-
-    const daysUntilReview = Math.max(0, (nextReview - now) / dayMs);
-    const stability = Math.max(0.3, wordState?.stability || 1);
-    const relativeDistance = daysUntilReview / stability;
-
-    if (relativeDistance <= 0.25) {
-        return Math.random() < 0.4;
-    }
-
-    if (relativeDistance <= 0.75) {
-        return Math.random() < 0.22;
-    }
-
-    if (relativeDistance <= 1.5) {
-        return Math.random() < 0.12;
-    }
-
-    return Math.random() < 0.05;
-}
-
-function orderByUrgencyWithShuffledTies(words) {
-    const bucketed = words.map(word => {
-        const urgency = computeUrgency(word);
-        const urgencyBucket = Math.round(urgency * 100);
-        return { word, urgencyBucket };
-    });
-
-    bucketed.sort((a, b) => b.urgencyBucket - a.urgencyBucket);
-
-    const ordered = [];
-    let index = 0;
-
-    while (index < bucketed.length) {
-        const currentBucket = bucketed[index].urgencyBucket;
-        const tieGroup = [];
-
-        while (index < bucketed.length && bucketed[index].urgencyBucket === currentBucket) {
-            tieGroup.push(bucketed[index].word);
-            index += 1;
-        }
-
-        ordered.push(...shuffle(tieGroup));
-    }
-
-    return ordered;
-}
-
-function pickCardTypeAvoidingAdjacentDuplicate(wordState) {
-    const baseTypes = getEligibleReviewTypesForWord(wordState.id);
-
-    const previous = session[session.length - 1];
-    const blockedType = previous && previous.wordId === wordState.id && previous.cardType !== "definition"
-        ? previous.cardType
-        : null;
-
-    const inActiveLearningQueue = Boolean(
-        sessionRuntime
-        && sessionRuntime.mode === "learn"
-        && sessionRuntime.queuedLearningWordIds.includes(wordState.id)
-    );
-
-    if (inActiveLearningQueue) {
-        const unseenRequiredTypes = baseTypes.filter(type => {
-            const seenCount = wordState.reviewTypeStats?.[type]?.seen || 0;
-            return seenCount < 1;
-        });
-
-        if (unseenRequiredTypes.length) {
-            const unseenWithoutBlocked = blockedType && unseenRequiredTypes.length > 1
-                ? unseenRequiredTypes.filter(type => type !== blockedType)
-                : unseenRequiredTypes;
-
-            const unseenPool = unseenWithoutBlocked.length ? unseenWithoutBlocked : unseenRequiredTypes;
-            const unseenRandomIndex = Math.floor(Math.random() * unseenPool.length);
-            return unseenPool[unseenRandomIndex];
-        }
-    }
-
-    const candidates = blockedType && baseTypes.length > 1
-        ? baseTypes.filter(type => type !== blockedType)
-        : baseTypes;
-
-    const randomIndex = Math.floor(Math.random() * candidates.length);
-    return candidates[randomIndex];
-}
-
 function getEligibleReviewTypesForWord(wordId) {
     const entry = data[wordId];
     const eligibleTypes = [
@@ -1457,16 +1529,6 @@ function getEligibleReviewTypesForWord(wordId) {
     }
 
     return eligibleTypes;
-}
-
-function hasSeenAllRequiredReviewTypes(wordId, wordState) {
-    const requiredTypes = getEligibleReviewTypesForWord(wordId);
-    return requiredTypes.every(type => (wordState.reviewTypeStats?.[type]?.seen || 0) > 0);
-}
-
-function isWordReadyToGraduate(wordId, wordState) {
-    return scoreOnFive(wordState) >= LEARNING_GRADUATION_SCORE
-        && hasSeenAllRequiredReviewTypes(wordId, wordState);
 }
 
 function createWordWithPosBlock(entry, stackClassName, options = {}) {
@@ -1506,12 +1568,24 @@ function createWordWithPosBlock(entry, stackClassName, options = {}) {
         posInline.textContent = posText;
         wordRow.appendChild(posInline);
 
+        const ipaText = normalizeIpa(entry?.ipa);
         const ipaBelow = document.createElement("span");
         ipaBelow.className = "word-ipa-below";
-        ipaBelow.textContent = normalizeIpa(entry?.ipa);
+        ipaBelow.textContent = ipaText;
 
         stack.appendChild(wordRow);
         stack.appendChild(ipaBelow);
+
+        requestAnimationFrame(() => {
+            if (wordRow.scrollWidth > wordRow.clientWidth && posInline.isConnected) {
+                posInline.remove();
+                const posBelow = document.createElement("span");
+                posBelow.className = "word-pos";
+                posBelow.textContent = posText;
+                stack.insertBefore(posBelow, ipaBelow);
+            }
+        });
+
         return stack;
     }
 
@@ -1531,40 +1605,4 @@ function formatPos(rawPos) {
 
     const cleaned = rawPos.trim();
     return cleaned || "-";
-}
-
-function canIntroduceAnotherNewWord() {
-    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
-        return false;
-    }
-
-    if (!sessionRuntime.queuedLearningWordIds.length) {
-        return true;
-    }
-
-    return sessionRuntime.queuedLearningWordIds.every(wordId => {
-        const state = wordStates[wordId];
-        if (!state || state.learned) {
-            return true;
-        }
-
-        return hasSeenAllRequiredReviewTypes(wordId, state)
-            && scoreOnFive(state) >= LEARNING_GRADUATION_SCORE;
-    });
-}
-
-function shouldShowLearningGateHint() {
-    if (!sessionRuntime || sessionRuntime.mode !== "learn") {
-        return false;
-    }
-
-    if (sessionRuntime.pendingDefinitionWordIds.length > 0) {
-        return false;
-    }
-
-    if (sessionRuntime.nextWordCursor >= sessionRuntime.newWordOrderIds.length) {
-        return false;
-    }
-
-    return !canIntroduceAnotherNewWord();
 }
