@@ -461,11 +461,11 @@ function createSessionRuntime(nextMode) {
         const rawStep = Number(savedBootstrap?.step);
         const hasSavedStep = Number.isInteger(rawStep);
 
-        if (hasSavedStep) {
-            runtime.bootstrapStep = Math.max(0, Math.min(rawStep, BOOTSTRAP_SEQUENCE.length));
-        } else if (introducedCount === 0) {
+        if (introducedCount === 0) {
             runtime.bootstrapStep = 0;
             persistBootstrapStep(runtime.bootstrapStep);
+        } else if (hasSavedStep) {
+            runtime.bootstrapStep = Math.max(0, Math.min(rawStep, BOOTSTRAP_SEQUENCE.length));
         }
 
         if (introducedCount === 0 && runtime.bootstrapStep >= BOOTSTRAP_SEQUENCE.length) {
@@ -499,6 +499,19 @@ function generateNextCard() {
             wordId: forcedWordId,
             cardType: "definition"
         };
+    }
+
+    if (mode === "learn") {
+        const hasIntroduced = wordStates.some(state => isWordIntroduced(state));
+        if (!hasIntroduced) {
+            const firstWordId = pickRandomUnintroducedWordId();
+            if (firstWordId != null) {
+                return {
+                    wordId: firstWordId,
+                    cardType: "definition"
+                };
+            }
+        }
     }
 
     if (isBootstrapActive()) {
