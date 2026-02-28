@@ -114,6 +114,7 @@ Open: **http://localhost:5500**
 
 ## Notes
 
+- Vocabulary data is based on the ETS word list (2026), especially for TOEIC preparation.
 - Audio playback depends on available pronunciation links in your dataset.
 - Use **Delete all learned words** in-app to reset local progress.
 

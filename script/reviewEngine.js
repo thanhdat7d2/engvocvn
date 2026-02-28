@@ -1,6 +1,6 @@
 // reviewEngine.js
 
-import { recalculateWordMetrics } from "./wordState.js";
+import { recalculateWordMetrics, REVIEW_TYPES } from "./wordState.js";
 
 function ceilMinOne(value) {
     return Math.max(1, Math.ceil(value));
@@ -40,6 +40,8 @@ export function processReview(wordState, reviewType, isCorrect) {
 
     const safeTotalSeen = Math.max(1, Number(wordState.total_card_seen) || 1);
 
+    const isLexicalRelationCard = reviewType === REVIEW_TYPES.RT6 || reviewType === REVIEW_TYPES.RT7;
+
     if (isCorrect) {
         wordState.recent_queue.push(0);
         if (wordState.grow_rate < 1.4) {
@@ -60,13 +62,20 @@ export function processReview(wordState, reviewType, isCorrect) {
         wordState.total_incorrect = (Number(wordState.total_incorrect) || 0) + 1;
         wordState.recent_queue.push(1);
 
-        const recentIncorrect = wordState.recent_queue.reduce((sum, value) => {
-            return sum + (value ? 1 : 0);
-        }, 0);
-        const incorrectRatio = wordState.total_incorrect / safeTotalSeen;
+        if (isLexicalRelationCard) {
+            wordState.grow_rate = 1.33;
+            wordState.distance = ceilMinOne((Number(wordState.distance) || 1) * 0.75);
+            wordState.RTcounter[REVIEW_TYPES.RT1] = (Number(wordState.RTcounter[REVIEW_TYPES.RT1]) || 0) - 1;
+            wordState.RTcounter[REVIEW_TYPES.RT3] = (Number(wordState.RTcounter[REVIEW_TYPES.RT3]) || 0) - 1;
+        } else {
+            const recentIncorrect = wordState.recent_queue.reduce((sum, value) => {
+                return sum + (value ? 1 : 0);
+            }, 0);
+            const incorrectRatio = wordState.total_incorrect / safeTotalSeen;
 
-        wordState.grow_rate = clampGrowRate(determineGrowRateOnIncorrect(recentIncorrect, incorrectRatio));
-        wordState.distance = ceilMinOne((Number(wordState.distance) || 1) / 4);
+            wordState.grow_rate = clampGrowRate(determineGrowRateOnIncorrect(recentIncorrect, incorrectRatio));
+            wordState.distance = ceilMinOne((Number(wordState.distance) || 1) / 4);
+        }
         wordState.stability = Math.max(6, wordState.distance / 0.16252);
         wordState.counter = 0;
     }
